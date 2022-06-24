@@ -50,8 +50,8 @@ def generate_projection_data(model, output = 600, field_list = [],
             dset = '%s_%s'%(field,view)
             if dset not in plot_data.keys():
                 proj = yt.ProjectionPlot(ds, view, field, weight_field = weight_list[i], 
-                                         width=(width, 'kpc'), center = cen, data_source = box)
-                proj_frb =  proj.data_source.to_frb((width, 'kpc'), resolution)
+                                         width=width, center = cen, data_source = box)
+                proj_frb =  proj.data_source.to_frb(width, resolution)
 
                 plot_data.create_dataset(dset, data = np.array(proj_frb[field_list[i]]))
                 plot_data.flush()
@@ -100,7 +100,7 @@ def get_default_limits(field):
 
 
 def generate_profile_from_projection(field, model, width = 500, resolution = 800, 
-                                     xlog = False, ylog = True, ylims = None, nbins = None):
+                                     xlog = False, ylog = True, ylims = None, nbins = None, pressure_lims = (1e-6, 1e2)):
 
     frb = h5.File('data/projection_data_%s_%i_kpc'%(model, width), 'r')
     r_arr = np.array([]) # spatial information measuring distance from center of plot
@@ -117,8 +117,9 @@ def generate_profile_from_projection(field, model, width = 500, resolution = 800
     xbins = np.linspace(0, int(width/2), nbins)
     if xlog:
         xbins = np.logspace(1, np.log10(width/2),nbins)
-    if ylims is None:
-        ylims = find_plot_axis_range(img_arr, log = ylog)    
+#    if ylims is None:
+#        ylims = find_plot_axis_range(img_arr, log = ylog)
+#    ylims = (-6, 2)
     ybins = np.linspace(ylims[0], ylims[1], nbins)
     if ylog:
         ybins = np.power(10, ybins)
@@ -133,7 +134,7 @@ def generate_profile_from_projection(field, model, width = 500, resolution = 800
 
 
 
-def calculate_median_profile_from_meshgrid(x, y, z, confidence = 0.95, nbins = 50, centered = True, 
+def calculate_median_profile_from_meshgrid(x, y, z, confidence = 0.95, nbins = 100, centered = True, 
                                            convert_to_linear = True):
     # assuming z, x, y are the outputs of np.histogram2d
     if len(x) > len(z):
@@ -182,7 +183,7 @@ def calculate_median_profile_from_meshgrid(x, y, z, confidence = 0.95, nbins = 5
 
 
 def generate_radial_pressure_profile_data(h5file, field_list, model, xfield = 'spherical_position_radius', 
-                                        weight_field = 'mass', nbins = 100):
+                                          weight_field = 'mass', nbins = 500, pressure_units = 'eV/cm**3'):
     
     # assumption is: if this routine is called, it means the data for this field hasn't been generated yet
     
@@ -191,7 +192,7 @@ def generate_radial_pressure_profile_data(h5file, field_list, model, xfield = 's
     
     xdata = np.log10(sp[('gas', xfield)].in_units('kpc'))  # assuming xfield is some sort of radius field
     xdata[xdata==0] = -10 # in theory this should never be zero. in practice, it happens and breaks everything
-    xbins = np.linspace(1, 2.5, nbins)
+    xbins = np.linspace(1, np.log10(500), nbins)
     ybins = np.linspace(-6, 3, nbins)
     
     zdata = sp[('gas', weight_field)].in_units(get_default_units(weight_field))
@@ -200,10 +201,11 @@ def generate_radial_pressure_profile_data(h5file, field_list, model, xfield = 's
    # profile_data = {}#dict.fromkeys(field_list, np.array([]))
     
     for i, field in enumerate(field_list):
-        ydata = np.log10(sp[('gas', field)].in_units(get_default_units(field)))                                          
-
+        ydata = np.log10(sp[('gas', field)].in_units(pressure_units))
 
         H, xedges, yedges = np.histogram2d(xdata, ydata, bins = (xbins, ybins), weights = zdata)
+#        plt.pcolormesh(H, xedges, yedges)
+#        plt.savefig('test.png')
         xbins, median, mean, lowlim, uplim = calculate_median_profile_from_meshgrid(xedges[:-1], yedges[:-1], H)
        
         h5file.create_dataset('%s_median'%field, data = median)
@@ -225,7 +227,11 @@ def get_radial_pressure_profile_data(model, field_list = [], xfield = 'spherical
                                         weight_field = 'mass', data_dir = 'data'):
     
     #sim_location = get_sim_location(model, resolution, sim_dir = sim_dir)
-    stored_data_file = h5.File('%s/radial_pressure_profile_data_%s.h5'%(data_dir, model), 'a')
+    if weight_field == 'ones':
+        weight_type = 'volume'
+    else:
+        weight_type = 'mass'
+    stored_data_file = h5.File('%s/radial_pressure_profile_data_%s_%s.h5'%(data_dir, weight_type, model), 'a')
     existing_keys = list(stored_data_file.keys())
     
     
