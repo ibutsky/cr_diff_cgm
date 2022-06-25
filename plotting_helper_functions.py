@@ -1,9 +1,10 @@
 import yt
 from yt.frontends.gizmo.api import GizmoDataset
-from yt import YTArray
+from yt import YTArray, YTQuantity
 
 import numpy as np
 import h5py as h5
+import os
 import matplotlib.pylab as plt
 from matplotlib.colors import LogNorm, ListedColormap
 import seaborn as sns
@@ -12,9 +13,9 @@ sns.set_style("ticks",{'axes.grid': True, 'grid.linestyle': '--'})
 import yt_helper as yth
 
 def generate_projection_data(model, output = 600, field_list = [],
-                             weight_list = [], width = 500, resolution = 800):
+                             weight_list = [], radius = 1000, resolution = 800):
 
-    plot_data = h5.File('data/projection_data_%s_%i_kpc'%(model, width), 'a')
+    plot_data = h5.File('data/projection_data_%s_%ikpc.h5'%(model, radius), 'a')
 
     existing_keys = list(plot_data.keys())
 
@@ -27,8 +28,8 @@ def generate_projection_data(model, output = 600, field_list = [],
         return
     
     ds, cen = yth.load_ds(model)
-    sp = ds.sphere(cen, (width, 'kpc'))
-    half_length = YTArray(0.5*np.array([width, width, width]), 'kpc')
+#    sp = ds.sphere(cen, (radius, 'kpc'))
+    half_length = YTArray(np.array([radius, radius, radius]), 'kpc')
     
     left_edge = cen - half_length#ds.arr(cen.in_units('kpc') - ds.arr(half_length, 'kpc') YTArray(0.5*[width, width, width], 'kpc')
     right_edge = cen + half_length#YTArray(0.5*[width, width, width], 'kpc')
@@ -38,7 +39,7 @@ def generate_projection_data(model, output = 600, field_list = [],
     # set up projection plots for fields that are weighted and unweighted                                                         
     #del plot_data['radial_velocity']   
     if 'radius' not in plot_data.keys():
-        width = yt.YTQuantity(width, 'kpc')
+        width = yt.YTQuantity(radius*2, 'kpc')
         px, py = np.mgrid[-width/2:width/2:resolution*1j, -width/2:width/2:resolution*1j]
         radius = (px**2.0 + py**2.0)**0.5
         plot_data.create_dataset("radius", data = radius.ravel())
@@ -99,10 +100,10 @@ def get_default_limits(field):
     return unit
 
 
-def generate_profile_from_projection(field, model, width = 500, resolution = 800, 
+def generate_profile_from_projection(field, model, radius = 1000, resolution = 800, 
                                      xlog = False, ylog = True, ylims = None, nbins = None, pressure_lims = (1e-6, 1e2)):
 
-    frb = h5.File('data/projection_data_%s_%i_kpc'%(model, width), 'r')
+    frb = h5.File('data/projection_data_%s_%ikpc.h5'%(model, radius), 'r')
     r_arr = np.array([]) # spatial information measuring distance from center of plot
     img_arr = np.array([]) # the plot data from the projection plot
     for axis in ['x', 'y', 'z']:
@@ -114,9 +115,9 @@ def generate_profile_from_projection(field, model, width = 500, resolution = 800
     if nbins is None:
         nbins = int(resolution / 2)
 
-    xbins = np.linspace(0, int(width/2), nbins)
+    xbins = np.linspace(0, radius, nbins)
     if xlog:
-        xbins = np.logspace(1, np.log10(width/2),nbins)
+        xbins = np.logspace(1, np.log10(radius),nbins)
 #    if ylims is None:
 #        ylims = find_plot_axis_range(img_arr, log = ylog)
 #    ylims = (-6, 2)
@@ -183,16 +184,16 @@ def calculate_median_profile_from_meshgrid(x, y, z, confidence = 0.95, nbins = 1
 
 
 def generate_radial_pressure_profile_data(h5file, field_list, model, xfield = 'spherical_position_radius', 
-                                          weight_field = 'mass', nbins = 500, pressure_units = 'eV/cm**3'):
+                                          weight_field = 'mass', nbins = 500, pressure_units = 'eV/cm**3', extent = 1000):
     
     # assumption is: if this routine is called, it means the data for this field hasn't been generated yet
     
     ds, center = yth.load_ds(model)
-    sp = ds.sphere(center, (500, 'kpc'))
+    sp = ds.sphere(center, (extent, 'kpc'))
     
     xdata = np.log10(sp[('gas', xfield)].in_units('kpc'))  # assuming xfield is some sort of radius field
     xdata[xdata==0] = -10 # in theory this should never be zero. in practice, it happens and breaks everything
-    xbins = np.linspace(1, np.log10(500), nbins)
+    xbins = np.linspace(1, np.log10(extent), nbins)
     ybins = np.linspace(-6, 3, nbins)
     
     zdata = sp[('gas', weight_field)].in_units(get_default_units(weight_field))
@@ -259,3 +260,133 @@ def get_radial_pressure_profile_data(model, field_list = [], xfield = 'spherical
     return data_to_output
    
                                       
+def estimate_sfr(model, time_interval = 1e9):
+    time, sfr = get_sfh_data(model)
+
+    time *= 1e9 # converting from Gyr to yr
+    dt = (time[1::2] - time[::2])[0] # dt defined to be constant throughout
+    # destacking, since get_sfh_data originally made to plot sfr
+    time = time[1::2] # in units of yr
+    sfr = sfr[::2] # in units of Msun/yr
+
+    current_time = time[-1]
+    mask = time >= current_time - time_interval
+
+    stellar_mass = np.sum(sfr[mask] * dt) 
+    
+    return stellar_mass / time_interval
+
+
+def get_vcirc_profile(model, impact_list = None, radius = 1000, mass_unit = 'g', save = True):
+    # V_c = sqrt(GM(<r) /r)
+    fname = 'data/vcirc_profile_%s.h5'%model
+    if os.path.isfile(fname):
+        h5file = h5.File(fname, 'r')
+        impact = h5file['impact'][:]
+        vc_list = h5file['vcirc'][:]
+    else:
+        if impact_list is None:
+            impact_list = np.logspace(1,np.log10(radius), 100)
+            save = False
+
+        ds, center = yth.load_ds(model)
+        max_r = 1.2 * np.max(impact_list)
+        ad = ds.sphere(center, (max_r, 'kpc'))
+    
+        G = YTQuantity(6.6743e-11, 'm**3 / kg / s**2')
+        r_gas = ad[('gas', 'spherical_position_radius')].in_units('kpc')
+        r_star = ad[('PartType4', 'particle_position_spherical_radius')].in_units('kpc')
+        r_dark = ad[('PartType1', 'particle_position_spherical_radius')].in_units('kpc')
+        m_gas = ad[('gas', 'mass')]#.in_units(mass_unit)
+        m_star = ad[('PartType4', 'particle_mass')]#.in_units(mass_unit)
+        m_dark = ad[('PartType1', 'particle_mass')]#.in_units(mass_unit)
+        # mtot = m_gas + m_star + m_dark
+    
+        vc_list = np.array([])
+        for impact in impact_list:
+            impact = YTQuantity(impact, 'kpc')
+            # mask = r < impact
+            #m_enc = YTQuantity(np.sum(mtot[mask]), mass_unit)
+            m_enc = np.sum(m_gas[r_gas <= impact]) + np.sum(m_star[r_star <= impact]) + np.sum(m_dark[r_dark <= impact])
+            vc = np.sqrt(G * m_enc / impact).in_units('km/s')
+            vc_list = np.append(vc_list, vc)
+
+        if save:
+            h5file = h5.File(fname, 'w')
+            h5file.create_dataset('impact', data = impact_list)
+            h5file.create_dataset('vcirc', data = vc_list)
+        
+    return impact, vc_list
+
+
+def get_min_diffusivity_estimate(model, extent = 1000, sfr_time_interval = 1e9):
+    fname = 'data/min_diffusivity_%s.h5'%model
+    if os.path.isfile(fname):
+        h5file = h5.File(fname, 'r')
+        impact = h5file['impact'][:]
+        min_kappa = h5file['min_kappa'][:]
+    else:
+        impact, Hcol = get_radial_H_column(model, extent = extent)
+        sfr = estimate_sfr(model, time_interval = sfr_time_interval)
+        temp, vc = get_vcirc_profile(model, impact)
+        min_kappa = 5 * (1e19 / Hcol) * sfr * np.power((200 / vc), 2) * 1e30
+        
+        h5file = h5.File(fname, 'w')
+        h5file.create_dataset('impact', data = impact)
+        h5file.create_dataset('min_kappa', data = min_kappa)
+        h5file.create_dataset('vc', data = vc)
+        
+    return np.array(impact), np.array(min_kappa)
+
+
+def get_radial_H_column(model, extent = 1000):
+
+    field = 'H_nuclei_density'
+    fname = 'data/H_col_profile_%s.h5'%model
+    if os.path.isfile(fname):
+        h5file = h5.File(fname, 'r')
+        impact = h5file['impact'][:]
+        median = h5file['Hcol_med'][:]
+    else:      
+        generate_projection_data(model, field_list = [('gas', field)], weight_list = [None], radius = extent)
+        xbins, ybins, counts = generate_profile_from_projection('H_nuclei_density', model, radius = extent, ylims = (18, 22))
+        impact, median, mean, lowlim, uplim = calculate_median_profile_from_meshgrid(xbins[1:], ybins[1:], counts,
+                                                                  nbins = 100, convert_to_linear = False)
+        h5file = h5.File(fname, 'w')
+        h5file.create_dataset('impact', data = impact)
+        h5file.create_dataset('Hcol_med', data = median)
+        h5file.create_dataset('Hcol_mean', data = mean)
+        h5file.create_dataset('Hcol_lowlim', data = lowlim)
+        h5file.create_dataset('Hcol_uplim', data = uplim)
+        
+    return np.array(impact), np.array(median)
+
+
+def get_sfh_data(model, nbins = 100):
+
+    fname = 'data/sfh_%s.h5'%model
+    if os.path.isfile(fname):
+        h5file = h5.File(fname, 'r')
+        time = h5file['time'][:]
+        sfr = h5file['sfr'][:]
+    else:
+        ds, center = yth.load_ds(model)
+        ad = ds.all_data()
+        creation_time = ad[('PartType4', 'creation_time')].in_units('yr')
+        stellar_mass = ad[('PartType4', 'particle_mass')].in_units('Msun')
+        current_time = ds.current_time.in_units('yr')
+    
+        time_list = np.linspace(0, current_time, nbins)
+        mass_list = np.array([])
+        for i in range(1, len(time_list)):
+            dt = time_list[i] - time_list[i-1]
+            mask = (creation_time >= time_list[i-1]) & (creation_time < time_list[i])
+            mass_list = np.append(mass_list, np.sum(stellar_mass[mask]) / dt)
+        x = np.vstack((time_list[:-1], time_list[1:])).reshape((-1), order = 'F') / 1e9 # in Gyr
+        y = np.vstack((mass_list, mass_list)).reshape((-1), order = 'F')
+    
+        h5file = h5.File(fname, 'w')
+        h5file.create_dataset('time', data = x)
+        h5file.create_dataset('sfr', data = y)
+    
+    return time, sfr

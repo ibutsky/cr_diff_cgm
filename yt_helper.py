@@ -53,3 +53,6 @@ def load_ds(model, output = 600, cr = False):
     # find center (need to find better way)
     v, center = ds.find_max(('gas', 'density'))
     return ds, center
+
+
+
