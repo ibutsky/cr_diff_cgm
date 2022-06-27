@@ -99,6 +99,13 @@ def get_default_limits(field):
         unit == ''
     return unit
 
+def get_label(model):
+    base_name = model[:4]
+    if model.__contains__('cr'):
+        return "%s (CR+)"%base_name
+    else:
+        return "%s (MHD+)"%base_name
+
 
 def generate_profile_from_projection(field, model, radius = 1000, resolution = 800, 
                                      xlog = False, ylog = True, ylims = None, nbins = None, pressure_lims = (1e-6, 1e2)):
@@ -203,6 +210,10 @@ def generate_radial_pressure_profile_data(h5file, field_list, model, xfield = 's
     
     for i, field in enumerate(field_list):
         ydata = np.log10(sp[('gas', field)].in_units(pressure_units))
+
+        ymin = 0.9*np.min(ydata) 
+        ymax = 1.1*np.max(ydata)
+        ybins = np.linspace(ymin, ymax, nbins)
 
         H, xedges, yedges = np.histogram2d(xdata, ydata, bins = (xbins, ybins), weights = zdata)
 #        plt.pcolormesh(H, xedges, yedges)
@@ -326,8 +337,11 @@ def get_min_diffusivity_estimate(model, extent = 1000, sfr_time_interval = 1e9):
         impact = h5file['impact'][:]
         min_kappa = h5file['min_kappa'][:]
     else:
+        print("generating H column profiles")
         impact, Hcol = get_radial_H_column(model, extent = extent)
+        print("estimating star formation rate")
         sfr = estimate_sfr(model, time_interval = sfr_time_interval)
+        print("generating vcirc profile")
         temp, vc = get_vcirc_profile(model, impact)
         min_kappa = 5 * (1e19 / Hcol) * sfr * np.power((200 / vc), 2) * 1e30
         
