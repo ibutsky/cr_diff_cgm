@@ -207,19 +207,22 @@ def generate_radial_pressure_profile_data(h5file, field_list, model, xfield = 's
     
     #empty dictionary
    # profile_data = {}#dict.fromkeys(field_list, np.array([]))
-    
+
     for i, field in enumerate(field_list):
         ydata = np.log10(sp[('gas', field)].in_units(pressure_units))
 
-        ymin = 0.9*np.min(ydata) 
-        ymax = 1.1*np.max(ydata)
+        mask = np.isfinite(ydata)
+        ymin = 0.9*np.min(ydata[mask]) 
+        ymax = 1.1*np.max(ydata[mask])
         ybins = np.linspace(ymin, ymax, nbins)
 
-        H, xedges, yedges = np.histogram2d(xdata, ydata, bins = (xbins, ybins), weights = zdata)
-#        plt.pcolormesh(H, xedges, yedges)
+        H, xedges, yedges = np.histogram2d(xdata[mask], ydata[mask], bins = (xbins, ybins), weights = zdata[mask])
+        
+#        X, Y =np.meshgrid(xedges, yedges)
+#        plt.pcolormesh(X, Y,  H)
 #        plt.savefig('test.png')
         xbins, median, mean, lowlim, uplim = calculate_median_profile_from_meshgrid(xedges[:-1], yedges[:-1], H)
-       
+        
         h5file.create_dataset('%s_median'%field, data = median)
         h5file.create_dataset('%s_mean'%field,   data = mean)
         h5file.create_dataset('%s_lowlim'%field, data = lowlim)
@@ -257,7 +260,7 @@ def get_radial_pressure_profile_data(model, field_list = [], xfield = 'spherical
     # generate and save the missing data
     if np.size(fields_to_generate) > 0:
         generate_radial_pressure_profile_data(stored_data_file, fields_to_generate, model,
-                                              xfield = xfield, weight_field = weight_field)
+                                              xfield = xfield, weight_field = weight_type)
         
     # now we should have all the data and can just load it in
     data_to_output[xfield] = np.array(stored_data_file.get(xfield))
