@@ -83,6 +83,8 @@ def get_default_units(field):
         unit = ''
     elif field.__contains__('pressure'):
         unit = 'eV / cm**3'
+    elif field == 'density':
+        unit = 'g/cm**3'
     else:
         unit == ''
     return unit
@@ -242,11 +244,8 @@ def get_radial_pressure_profile_data(model, field_list = [], xfield = 'spherical
                                         weight_field = 'mass', data_dir = 'data'):
     
     #sim_location = get_sim_location(model, resolution, sim_dir = sim_dir)
-    if weight_field == 'ones':
-        weight_type = 'volume'
-    else:
-        weight_type = 'mass'
-    stored_data_file = h5.File('%s/radial_pressure_profile_data_%s_%s.h5'%(data_dir, weight_type, model), 'a')
+
+    stored_data_file = h5.File('%s/radial_pressure_profile_data_%s_%s.h5'%(data_dir, weight_field, model), 'a')
     existing_keys = list(stored_data_file.keys())
     
     
@@ -260,7 +259,7 @@ def get_radial_pressure_profile_data(model, field_list = [], xfield = 'spherical
     # generate and save the missing data
     if np.size(fields_to_generate) > 0:
         generate_radial_pressure_profile_data(stored_data_file, fields_to_generate, model,
-                                              xfield = xfield, weight_field = weight_type)
+                                              xfield = xfield, weight_field = weight_field)
         
     # now we should have all the data and can just load it in
     data_to_output[xfield] = np.array(stored_data_file.get(xfield))
