@@ -192,52 +192,6 @@ def calculate_median_profile_from_meshgrid(x, y, z, confidence = 0.95, nbins = 1
     return xbins[:-1], median, mean, lowlim, uplim #, std_lower, std_upper
 
 
-def generate_radial_pressure_profile_data(h5file, field_list, model, xfield = 'spherical_position_radius', 
-                                          weight_field = 'mass', nbins = 500, pressure_units = 'eV/cm**3', extent = 1000):
-    
-    # assumption is: if this routine is called, it means the data for this field hasn't been generated yet
-    
-    ds, center = yth.load_ds(model)
-    sp = ds.sphere(center, (extent, 'kpc'))
-    
-    xdata = np.log10(sp[('gas', xfield)].in_units('kpc'))  # assuming xfield is some sort of radius field
-    xdata[xdata==0] = -10 # in theory this should never be zero. in practice, it happens and breaks everything
-    xbins = np.linspace(1, np.log10(extent), nbins)
-    ybins = np.linspace(-6, 3, nbins)
-    
-    zdata = sp[('gas', weight_field)].in_units(get_default_units(weight_field))
-    
-    #empty dictionary
-   # profile_data = {}#dict.fromkeys(field_list, np.array([]))
-
-    for i, field in enumerate(field_list):
-        ydata = np.log10(sp[('gas', field)].in_units(pressure_units))
-
-        mask = np.isfinite(ydata)
-        ymin = 0.9*np.min(ydata[mask]) 
-        ymax = 1.1*np.max(ydata[mask])
-        ybins = np.linspace(ymin, ymax, nbins)
-
-        H, xedges, yedges = np.histogram2d(xdata[mask], ydata[mask], bins = (xbins, ybins), weights = zdata[mask])
-        
-#        X, Y =np.meshgrid(xedges, yedges)
-#        plt.pcolormesh(X, Y,  H)
-#        plt.savefig('test.png')
-        xbins, median, mean, lowlim, uplim = calculate_median_profile_from_meshgrid(xedges[:-1], yedges[:-1], H)
-        
-        h5file.create_dataset('%s_median'%field, data = median)
-        h5file.create_dataset('%s_mean'%field,   data = mean)
-        h5file.create_dataset('%s_lowlim'%field, data = lowlim)
-        h5file.create_dataset('%s_uplim'%field,  data = uplim)
-        
-
-    # just in case this wasn't already loaded:
-    if xfield not in list(h5file.keys()):
-        h5file.create_dataset(xfield, data = xbins)
-        
-
-                                                                                    
-                                      
 def estimate_sfr(model, time_interval = 1e9):
     time, sfr = get_sfh_data(model)
 
@@ -373,30 +327,23 @@ def get_sfh_data(model, nbins = 100):
     return time, sfr
 
 
-def load_pressure_profiles(model, field_list, dens_threshold = None):
+def load_pressure_profiles(model, field_list = None, dens_threshold = None):
     if dens_threshold is not None:
         fname = 'data/pressure_profiles_rho%e_%s.h5'%(dens_threshold, model)
     else:
         fname = 'data/pressure_profiles_%s.h5'%model
         
     if not os.path.isfile(fname):
-        generate_pressure_profiles(model, dens_threshold = dens_threshold)
-        
-    data = h5.File(fname, 'r') 
-    
-    
+        generate_pressure_profiles(model, field_list = field_list, dens_threshold = dens_threshold)
+            
     stored_data_file = h5.File(fname, 'r')
 
     data_to_output = {}#dict.fromkeys(field_list, np.array([]))                                                                                                         
     field_list = np.array(field_list) # needs to be numpy array                                                                                                         
 
-    # now we should have all the data and can just load it in                                                                                                           
-    data_to_output['radius'] = np.array(stored_data_file.get('radius'))
-    for field in field_list:
-        for data_type in ['mean', 'median', 'lowlim', 'uplim']:
-            field_entry = '%s_%s'%(field, data_type)
-            # copying into dictionary so that we can close h5 file... idk if that's realy necessary                                                                     
-            data_to_output[field_entry] = np.array(stored_data_file.get(field_entry))
+    # now we should have all the data and can just load it in
+    for key in stored_data_file.keys():
+        data_to_output[key] = np.array(stored_data_file.get(key))
     stored_data_file.close()
     return data_to_output
 
