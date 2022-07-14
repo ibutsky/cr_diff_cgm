@@ -16,9 +16,11 @@ def _number_density(field, data):
     return rho / (mu * mh)
     
 def _cosmic_ray_pressure(field, data):
-    cre = data.ds.arr(data[('PartType0', 'CosmicRayEnergy')], 'code_pressure')
-    crp = cre / 3.0 
-    return (crp).in_units('eV / cm**3')
+    ucr = data.ds.arr((data[("PartType0", "CosmicRayEnergy")] / data[("PartType0", "Masses")]).v, "code_specific_energy")
+    rho = data[('gas', 'density')]
+
+    pcr = (ucr / 3.0) * rho
+    return (pcr).in_units('eV / cm**3')
 
 #def _pressure(field, data):
 #    p = data.ds.arr(data[('PartType0', 'Pressure')], 'code_pressure')
