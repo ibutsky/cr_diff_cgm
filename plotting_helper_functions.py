@@ -236,42 +236,7 @@ def generate_radial_pressure_profile_data(h5file, field_list, model, xfield = 's
         h5file.create_dataset(xfield, data = xbins)
         
 
-        
-                                      
-                                      
-
-def get_radial_pressure_profile_data(model, field_list = [], xfield = 'spherical_position_radius', 
-                                        weight_field = 'mass', data_dir = 'data'):
-    
-    #sim_location = get_sim_location(model, resolution, sim_dir = sim_dir)
-
-    stored_data_file = h5.File('%s/radial_pressure_profile_data_%s_%s.h5'%(data_dir, weight_field, model), 'a')
-    existing_keys = list(stored_data_file.keys())
-    
-    
-    data_to_output = {}#dict.fromkeys(field_list, np.array([]))
-    field_list = np.array(field_list) # needs to be numpy array
-    
-    
-    # first, find the fields that aren't already saved
-    fields_to_generate = field_list[['%s_median'%field not in existing_keys for field in field_list]]
-    
-    # generate and save the missing data
-    if np.size(fields_to_generate) > 0:
-        generate_radial_pressure_profile_data(stored_data_file, fields_to_generate, model,
-                                              xfield = xfield, weight_field = weight_field)
-        
-    # now we should have all the data and can just load it in
-    data_to_output[xfield] = np.array(stored_data_file.get(xfield))
-    for field in field_list:
-        for data_type in ['mean', 'median', 'lowlim', 'uplim']:
-            field_entry = '%s_%s'%(field, data_type)
-            # copying into dictionary so that we can close h5 file... idk if that's realy necessary
-            data_to_output[field_entry] = np.array(stored_data_file.get(field_entry))
-        
-    stored_data_file.close()
-    return data_to_output
-   
+                                                                                    
                                       
 def estimate_sfr(model, time_interval = 1e9):
     time, sfr = get_sfh_data(model)
@@ -406,3 +371,161 @@ def get_sfh_data(model, nbins = 100):
         h5file.create_dataset('sfr', data = y)
     
     return time, sfr
+
+
+def load_pressure_profiles(model, field_list, dens_threshold = None):
+    if dens_threshold is not None:
+        fname = 'data/pressure_profiles_rho%e_%s.h5'%(dens_threshold, model)
+    else:
+        fname = 'data/pressure_profiles_%s.h5'%model
+        
+    if not os.path.isfile(fname):
+        generate_pressure_profiles(model, dens_threshold = dens_threshold)
+        
+    data = h5.File(fname, 'r') 
+    
+    
+    stored_data_file = h5.File(fname, 'r')
+
+    data_to_output = {}#dict.fromkeys(field_list, np.array([]))                                                                                                         
+    field_list = np.array(field_list) # needs to be numpy array                                                                                                         
+
+    # now we should have all the data and can just load it in                                                                                                           
+    data_to_output['radius'] = np.array(stored_data_file.get('radius'))
+    for field in field_list:
+        for data_type in ['mean', 'median', 'lowlim', 'uplim']:
+            field_entry = '%s_%s'%(field, data_type)
+            # copying into dictionary so that we can close h5 file... idk if that's realy necessary                                                                     
+            data_to_output[field_entry] = np.array(stored_data_file.get(field_entry))
+    stored_data_file.close()
+    return data_to_output
+
+def generate_pressure_profiles(model, field_list = None, impact_list = None, dens_threshold = None, 
+                               save = True, overwrite = False):
+    
+    if dens_threshold is not None:
+        fname = 'data/pressure_profiles_rho%e_%s.h5'%(dens_threshold, model)
+    else:
+        fname = 'data/pressure_profiles_%s.h5'%model    
+        
+    if os.path.isfile(fname) and overwrite == False:
+        return
+    
+    h5file = h5.File(fname, 'w')
+
+    if field_list is None:
+        field_list = np.array(['kinetic_energy', 'pressure', 'magnetic_pressure'])
+        if model.__contains__('cr'):
+            field_list = np.append(field_list, 'cosmic_ray_pressure')
+    if impact_list is None:
+        impact_list = np.logspace(0.8,3.1, 120)
+    h5file.create_dataset('radius', data = impact_list)
+
+
+    ds, center = yth.load_ds(model)
+    max_r = 1.2 * np.max(impact_list)
+    ad = ds.sphere(center, (max_r, 'kpc'))
+
+    r_gas = ad[('gas', 'spherical_position_radius')].in_units('kpc') 
+    rho = ad[('gas', 'density')].in_units('g/cm**3')
+    
+ 
+    
+    for field in field_list:
+        med_list = np.array([])
+        mean_list = np.array([])
+        lowlim_list = np.array([])
+        uplim_list  = np.array([])
+        for i, impact in enumerate(impact_list):
+            impact = YTQuantity(impact, 'kpc')
+            if i == 0:
+                g_mask = (r_gas < impact) 
+            else:
+                g_mask = (r_gas <= impact) & (r_gas > impact_list[i-1])
+                
+            if dens_threshold is not None:
+                g_mask = g_mask & (rho < dens_threshold)
+                
+            p = ad[('gas', field)].in_units('eV / cm**3')
+            med_list = np.append(med_list, np.median(p[g_mask]))
+            mean_list = np.append(mean_list, np.mean(p[g_mask]))
+            lowlim, uplim = np.percentile(p[g_mask], [5, 95])
+            lowlim_list = np.append(lowlim_list, lowlim)
+            uplim_list = np.append(uplim_list, uplim)
+
+
+        h5file.create_dataset('%s_median'%field, data = med_list)
+        h5file.create_dataset('%s_mean'%field, data = mean_list)
+        h5file.create_dataset('%s_lowlim'%field, data = lowlim_list)
+        h5file.create_dataset('%s_uplim'%field, data = uplim_list)
+            
+    h5file.close()
+
+
+
+def get_pgrav(model, impact_list = None, radius = 1000, save = True):
+    # V_c = sqrt(GM(<r) /r)                                                                                                                         
+    fname = 'data/Pgrav_profile_%s.h5'%model
+    if os.path.isfile(fname):
+        h5file = h5.File(fname, 'r')
+        impact_list = h5file['radius'][:]
+        Pgrav_list = h5file['Pgrav'][:]
+
+        lowlim_list = h5file['lowlim'][:]
+        uplim_list = h5file['uplim'][:]
+    else:
+        if impact_list is None:
+            impact_list = np.logspace(1,np.log10(radius), 100)
+
+        ds, center = yth.load_ds(model)
+        max_r = 1.2 * np.max(impact_list)
+        ad = ds.sphere(center, (max_r, 'kpc'))
+
+        G = YTQuantity(6.6743e-11, 'm**3 / kg / s**2')
+        r_gas = ad[('gas', 'spherical_position_radius')].in_units('kpc')
+        r_star = ad[('PartType4', 'particle_position_spherical_radius')].in_units('kpc')
+        r_dark = ad[('PartType1', 'particle_position_spherical_radius')].in_units('kpc')
+        r_dark2 = ad[('PartType2', 'particle_position_spherical_radius')].in_units('kpc')
+        m_gas = ad[('gas', 'mass')].in_units('g')                                                                                          
+        m_star = ad[('PartType4', 'particle_mass')].in_units('g')                                                                           
+        m_dark = ad[('PartType1', 'particle_mass')].in_units('g')
+        m_dark2 = ad[('PartType2', 'particle_mass')].in_units('g')
+
+        Pgrav_list  = np.array([])
+
+        lowlim_list = np.array([])
+        uplim_list  = np.array([])
+        for i, impact in enumerate(impact_list):
+            impact = YTQuantity(impact, 'kpc')
+            m_enc = np.sum(m_gas[r_gas <= impact].in_units('g')) + np.sum(m_star[r_star <= impact].in_units('g')) \
+                + np.sum(m_dark[r_dark <= impact].in_units('g')) + np.sum(m_dark2[r_dark2 <= impact].in_units('g'))
+            if i == 0:
+                g_mask = r_gas < impact
+                s_mask = r_star < impact
+                d_mask = r_dark < impact
+                vol = YTQuantity(4./3. * np.pi * np.power(impact, 3), 'kpc**3')
+
+            else:
+                g_mask = (r_gas <= impact) & (r_gas > impact_list[i-1])
+                s_mask = (r_star <= impact) & (r_star > impact_list[i-1])
+                d_mask = (r_dark <= impact) & (r_dark > impact_list[i-1])
+                vol = YTQuantity(4./3. * np.pi * ((np.power(impact_list[i], 3) - np.power(impact_list[i-1], 3))), 'kpc**3')
+                
+            rho = ad[('gas', 'density')].in_units('g/cm**3')
+
+            PG = (rho[g_mask]*G*m_enc / (2 * impact)).in_units('eV / cm**3')
+            Pgrav_list = np.append(Pgrav_list, np.mean(PG))
+            lowlim, uplim = np.percentile(PG, [5, 95])
+            lowlim_list = np.append(lowlim_list, lowlim)
+            uplim_list = np.append(uplim_list, uplim)
+
+
+        if save:
+            h5file = h5.File(fname, 'w')
+            h5file.create_dataset('radius', data = impact_list)
+            h5file.create_dataset('Pgrav', data = Pgrav_list)
+            h5file.create_dataset('lowlim', data = lowlim_list)
+            h5file.create_dataset('uplim', data = uplim_list)
+
+
+    return impact_list, Pgrav_list, lowlim_list, uplim_list
